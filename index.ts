@@ -4,7 +4,8 @@ import path from "node:path";
 import cors from "cors";
 import crypto from "node:crypto";
 import { verifyToken } from "./firebase/auth.js";
-
+import Upload from "./s3/buket.js";
+import { ListUserFiles, DeleteUserFile } from "./s3/buket.js";
 const app = express();
 const UPLOAD_DIR = path.join(process.cwd(), "uploads");
 const TEMP_DIR = path.join(UPLOAD_DIR, "temp");
@@ -16,7 +17,7 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 app.use(
   cors({
     origin: "http://localhost:5173",
-    methods: ["GET", "POST", "OPTIONS"],
+    methods: ["GET", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
       "Authorization",
@@ -160,6 +161,17 @@ app.post("/upload/complete", express.json(), verifyToken, async (req, res) => {
       });
     });
 
+    // Inside /upload/complete, replace the Upload() call with:
+    const userId = (req as any).user.uid;
+    Upload(userId, safeName, finalPath)
+      .then(() => {
+        fs.unlinkSync(finalPath); // 👈 delete local file after successful S3 upload
+        console.log(`🗑️ Deleted local file: ${safeName}`);
+      })
+      .catch((e) => {
+        console.log(`error ${e}`);
+      });
+
     fs.rmdirSync(chunkDir);
 
     res.json({
@@ -174,5 +186,27 @@ app.post("/upload/complete", express.json(), verifyToken, async (req, res) => {
     });
   }
 });
+app.get("/files", verifyToken, async (req, res) => {
+  try {
+    const userId = (req as any).user.uid; // uid attached by verifyToken middleware
+    const files = await ListUserFiles(userId);
+    res.json({ files });
+  } catch (error) {
+    console.error("❌ Error listing files:", error);
+    res.status(500).json({ error: "Failed to list files" });
+  }
+});
+app.delete("/files/:fileName", verifyToken, async (req, res) => {
+  try {
+    const userId = (req as any).user.uid;
+    const fileName = decodeURIComponent(req.params.fileName);
 
+    await DeleteUserFile(userId, fileName);
+
+    res.json({ message: "File deleted successfully" });
+  } catch (error) {
+    console.error("❌ Error deleting file:", error);
+    res.status(500).json({ error: "Failed to delete file" });
+  }
+});
 app.listen(3000, () => console.log("🚀 Server running on port 3000"));
